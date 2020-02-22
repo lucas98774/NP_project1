@@ -1,0 +1,315 @@
+---
+title: "Project1"
+author: "Luke Spellman and John Oliver"
+date: "2/13/2020"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, include = F)
+
+library(plyr); library(corrplot); library(skimr); library(stringr);
+library(ggthemes); library(ggalt); library(ggmosaic); library(knitr); library(tidyverse)  # load some packages
+
+survival_df <- read.csv('./data_files/Survival(1).csv')  # read in the data
+morph_df <- read.csv('./data_files/morphometrics.csv')
+
+morph_df <- na.omit(morph_df)  # drop the single row since it is the only one missing
+
+theme_set(theme_minimal())  # might be useful
+
+new_labels <- list('BLG' = 'Bluegill', 'YEP' = 'Yellow_Head_Perch', 'CCP' = 'Common_Carp',
+                'CAP' = 'Other_Carp', 'FHM' = 'Fat_Head_Minnow', 
+                'CAP Adult' = 'Common_Carp_Adult', 'CAP Juvenile' = 'Common_Carp_Juvenile')  # verify the names 
+```
+
+
+```{r MissingData}
+survival_df %>%
+  dplyr::select(., c(starts_with('Mort'), starts_with('Conc'))) %>%
+  apply(., 2, function(x)sum(is.na(x)))
+
+survival_df %>%
+  dplyr::select(., c(starts_with('Mort'), starts_with('Conc'))) %>%
+  apply(., 2, function(x)sum(is.na(x))/length(x))
+```
+
+
+```{r pythonsetup, eval = F}
+# not currently working...
+# library(reticulate)  # load package to connect to python
+# use_python('C:/Users/lucas/Python/Python37/python.exe')
+# use_virtualenv('C:/Users/lucas/PyCharm Community Edition 2018.3.4/bin/sandbox')
+# 
+# knitr::knit_engines$set(python = reticulate::eng_python)  # set python engine
+```
+
+
+```{r Dropp}
+# skim(survival_df)  # do not need this anymore
+
+
+```
+
+```{r Cleaning}
+survival_df <- survival_df %>%
+  mutate(
+    Died = as.numeric(str_extract(survival_df$TotalMort, pattern = '^[0-9]')),  # ^ means start of string
+    Total = as.numeric(str_extract(survival_df$TotalMort, pattern = '[0-9]{1,2}$')), # $ means end of string
+    Percent_Died = ifelse(Total == 0, 0, Died/Total)
+    
+  )
+
+'
+For Cleaning the Total Mortality variable:
+  1. Originally stored in Died/Total format
+  2. Grab the First Number using a regular expression
+  3. Force to Numeric
+  4. Assign to Died
+  
+  1. Originally stored in Died/Total format
+  2. Grab the Second Number(s) using a regular expression
+  3. Force to Numeric
+  4. Assign to Total
+'
+
+```
+
+
+```{r Dropping}
+# Get rid of unnecessary variables
+# survival_df <- survival_df %>%
+#   select(., -c(Mort1, Mort4, Mort8, Mort24, Mort48, Mort72, Conc1, Conc4, Conc8, Conc24, Conc48, Conc72, TotalMort))
+
+'
+Deleted unnecessary columns including mortality at times, concentration at times, and total mortality (we made our own mortality variable) 
+'
+
+```
+
+
+```{r ExtractingDose}
+'
+
+Next:
+  Questions:
+    1. Are these datasets related? Can we bind them together? (They have different amt of rows)*
+    2. Is survival a summary df?
+    3. During eda do we use surv? or morph?
+
+'
+
+survival_df <- survival_df %>%
+  mutate(Dose = 
+           case_when(str_extract(Dosage.Level, 
+                                 pattern = '[/]?[a-z]{2}$') == 'mg' ~  # leave mg
+                       as.numeric(str_extract(Dosage.Level, pattern = '[0-9]{1,2}')),
+                    str_extract(Dosage.Level, 
+                                 pattern = '[/]?[a-z]{1}$') == 'g' ~
+                      as.numeric(str_extract(Dosage.Level, pattern = '[0-9]+[.][0-9]+')) * 1000,  # convert g to mg
+                    str_extract(Dosage.Level, 
+                                 pattern = '[/][a-z]{1}$') == '/d' ~  # convert mg/.../d to mg
+                      as.numeric(str_extract(Dosage.Level, pattern = '[0-9]+')),
+                    TRUE ~ 0  # change control to zero
+  )
+)
+
+```
+
+
+
+
+```{r Exploringlengthweight, include = T, hold = T, fig.cap= "Figure1"}
+morph_df %>%
+  mutate(Species = recode_factor(.x = .$Species, !!!new_labels)) %>%
+  group_by(Species) %>%
+  summarize(median_length = median(Standard.length), median_weight = median(Weight)) %>%
+  mutate(Species = factor(.$Species, 
+                          levels = .$Species[order(.$median_length)] )) %>% 
+  ggplot(., aes(x = Species)) + 
+  geom_bar(aes(y = median_length, fill = Species), stat = 'identity', position = 'dodge') + 
+  theme_minimal() + 
+  scale_fill_colorblind() + 
+  labs(y = 'Length in ??', x= '', fill = '', title = "Median Length by Species") +
+  guides(fill = 'none') +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+
+```{r Table2, include = T, fig.cap = "Figure 2"}
+morph_df %>%
+  mutate(Species = recode_factor(.x = .$Species, !!!new_labels)) %>%
+  group_by(Species) %>%
+  summarize(median_length = median(Standard.length), median_weight = median(Weight)) %>%
+  dplyr::select(., -median_length) %>%
+  kable()
+ 
+```
+
+
+```{r HeightvsWeight, include = T, fig.cap = "Figure 3", out.width=4}
+ggplot(morph_df, aes(Standard.length, Weight)) +
+  geom_bin2d(bins = 20, color ="white")+
+  scale_fill_gradient(low =  "#00AFBB", high = "#FC4E07") +
+  labs(fill = 'Number of Fish', x = 'Standard Length', title = "Fish Weight vs Height")
+
+# get feedback on this tomorrow (2/20)
+```
+
+
+```{r Exploring2, include = T, fig.cap = "Figure 4"}
+morph_df %>%
+  mutate(Species = recode_factor(.x = .$Species, !!!new_labels)) %>%
+  group_by(Species) %>%
+  summarize(Counts = n(), Percent = Counts / nrow(morph_df)) %>%
+  ggplot(., aes(x = Species, y = Counts))+
+  geom_bar(aes(fill = Species), stat = 'identity') +
+  geom_text(aes(label = paste0(round(Percent,3)*100, '%', sep = '')), hjust =1 ) + 
+  coord_flip() +
+  scale_fill_brewer(palette = 'Dark2')+
+  labs(y = 'Observed Count', x = '')
+
+# TODO come back and make this a stacked bar chart to include the Trial
+```
+
+
+```{r GGmosaic}
+ggplot(morph_df) +
+  geom_mosaic(aes(x = product(Species, Trial), fill = Species)) +
+  scale_fill_brewer(palette = 'Dark2') +
+  labs(x = 'Trial Type', y = 'Species', title = 'Types of Trials vs Species')
+```
+
+
+```{r SummaryTable, results = 'asis', include=T, fig.cap = "Figure 5"}
+# TODO figure out what this !!! does..
+
+morph_df %>%  
+  mutate(Species = recode_factor(.x = .$Species, !!!new_labels)) %>%
+  group_by(Species, Trial) %>%
+  summarize(Count = n()) %>%
+  spread(.,key = Species, value = Count, fill = 0) %>%
+  gather(key = Species, value = value, -Trial) %>%
+  ggplot(., aes(x = Trial, y = Species)) +
+  geom_tile(aes(fill = value)) +
+  scale_fill_gradient(high =  "lightcoral", low = "khaki2") +
+  labs(x = '', y = '')
+
+
+
+# summary(tableby(Species~ Trial, data = morph_df, 
+#                 numeric.stats = 'count'), text = T)
+```
+
+
+
+```{python eval = F}
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+g = sns.jointplot(x="Standard.length", y="Weight", data=r.morph_df, kind="kde", color="m")
+g.plot_joint(plt.scatter, c = "k", s = 30, linewidth=1, marker="+")
+g.ax_joint.collections[0].set_alpha(0)
+plt.show()
+
+
+# just playing around here.... can't figure out how knit out a python chunk so we will may not be able to use it....
+```
+
+
+
+```{r Grouping}
+survival_df %>%
+  mutate(Species = recode_factor(.x = .$Species, !!!new_labels)) %>%
+  group_by(Species) %>%
+  summarize(Counts = n(), Percent = Counts / nrow(survival_df)) %>%
+  ggplot(., aes(x = Species, y = Counts))+
+  geom_bar(aes(fill = Species), stat = 'identity') +
+  geom_text(aes(label = paste0(round(Percent,3)*100, '%', sep = '')), hjust =1 ) + 
+  coord_flip() +
+  scale_fill_brewer(palette = 'Dark2')+
+  labs(y = 'Observed Count', x = '')
+# TODO come back and make this a stacked bar chart to include the Trial
+```
+
+```{r SurvivalSummary}
+survival_df %>%
+  mutate(Species = recode_factor(.x = .$Species, !!!new_labels)) %>%
+  ggplot(., aes(x = Species))+
+  geom_bar(aes(y = Percent_Died, fill = Species), stat = 'identity', position = 'dodge') +
+  facet_wrap(~Trial) +
+  labs(x = '',  y = 'Percent Died')+
+  theme(axis.title.x=element_blank(),
+    axis.text.x=element_blank(),
+    axis.ticks.x=element_blank())+
+  scale_fill_colorblind()
+```
+
+
+
+```{r Splitting}
+gavage_df <- survival_df %>% # split up dfs based on the Trial
+  filter(Trial == "Gavage")
+
+leaching_df <- survival_df %>%
+  filter(Trial == "Leaching")
+
+indout_df <- survival_df %>%
+  filter(Trial == "Indoor" |
+         Trial == "Outdoor")
+
+```
+
+
+```{r GavageAnalysis}
+out <- gavage_df %>% 
+  filter(., Dose > 50) %>% # drop the control
+  dplyr::select(Dose, Died) %>%
+  mutate(Dose = factor(Dose)) %>% 
+  group_by(Dose) %>% 
+  nest()
+
+high <- c(4,5)
+mid <- c(5,5)
+t.test(high,mid, alternative = 'two.sided')
+  
+
+gavage_df %>% 
+  filter(., Dose  %in% c(26,52)) %>% # drop the control
+  dplyr::select(Dose, Died) %>%
+  mutate(Dose = factor(Dose)) %>% 
+  group_by(Dose) %>% 
+  nest()
+low <- c(2,3)
+t.test(mid, low, alternative = 'greater')
+
+# TODO come back to this one
+```
+
+
+```{r LeachingAnalysis}
+leaching_df %>%
+  dplyr::select(., c(Trial, Tank, Species, Conc1:Dose)) %>% 
+  group_by(Species)
+```
+
+```{r InOut}
+indout_df %>%
+  ggplot(., aes(x = Species, y = Percent_Died)) +
+  geom_boxplot() +
+  facet_grid(factor(Dose)~Trial)
+
+indout_df %>% 
+  dplyr::select(., c(Trial, Tank, Species,Died:Dose)) %>% 
+  group_by(Dose)
+
+indout_df %>%
+  dplyr::select(., c(Trial, Species,Died:Dose)) %>% 
+  filter(., Dose == 0)
+```
+
+
