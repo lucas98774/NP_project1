@@ -1,0 +1,455 @@
+---
+title: "Assessing Treatment Impact on Native and Invasive Fish Species"
+author: "John Oliver and Lucas Spellman"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, include = F)
+
+library(plyr); library(corrplot); library(skimr); library(stringr); library(cowplot); library(ggpubr);
+library(ggthemes); library(ggalt); library(ggmosaic); library(knitr); library(pander); library(tidyverse)  # load some packages
+
+
+survival_df <- read.csv('./data_files/Survival(1).csv')  # read in the data
+morph_df <- read.csv('./data_files/morphometrics.csv')
+
+morph_df <- na.omit(morph_df)  # drop the single row since it is the only one missing
+
+theme_set(theme_minimal())  # might be useful
+
+new_labels <- list('BLG' = 'Bluegill', 'YEP' = 'Yellow Head Perch', 'CCP' = 'Common Carp',
+                'CAP' = 'Other Carp', 'FHM' = 'Fat Head Minnow', "CAP Adult" = "Common Carp Adult", 
+                "CAP Juvenile" = "Common Carp Juvenile")  # verify the names 
+
+# Set options for clean printing
+panderOptions('round', 2)
+panderOptions('keep.trailing.zeros', TRUE)
+
+pretty_print <- function(x) format(x, digits = 3)  # utility function
+```
+
+# Introduction
+
+Invasive carp have proven problematic among ecosystems and are known for their ability to cause drastic and lasting damage to both the environment and local species. Therefore, determining the optimal level of treatment to target and kill these invasive carp, while leaving native species unharmed, is of high importance. In this study, three separate trials were conducted involving bluegill, yellowhead perch, fathead minnow, common carp, and other carp. Invasive carp were initially administered different levels of dosage to determine the lethal threshold in gavage trials. Leaching trials were performed to observe how much of the given treatment would pass from the fish into the water. Indoor and outdoor trials focused on comparing the mortality of the invasive carp compared to other species among the same tanks, after the lethal dose was applied.   
+
+# Preparing and Cleaning the Data
+
+The researchers provided two data sets to be analyzed. The first data set, consisting of morphometric information, contained information on the height, weight, and species of each fish, along with the trial and dosage level administered. Each observation within this data set referred to one specific fish. The data provided initially contained 631 observations, with 1 containing missing information. Since this observation was only 0.15% of the data set, and missing both height and weight, we elected to removed it from the data set. It is important to note that in this data set each observation corresponded with one inidividual fish.
+
+The weight of the raw data was labeled in grams, milligrams, and mg/kg/d while the height was given in mm. In order to standardized the units, grams were computed to milligrams. Also, mg/kg/d were assumed to be equivalent to milligrams. These were then compiled in a new column labeled Dose. 
+
+The second data set, consisting of survival information, did not include height and weight, but rather information on mortality and dosage leak rate for each trial and tank pair. Whereas in the morphometric data set each observation referred to one individual fish, in the survival data set each observation referred to groups of a specific species of fish. For example, one of the observations within the data was a set of 5 Bluegill, while another was a set of 6 Common Carp. This data set consisted of the three different trials: Gavage *(7 observations)*, Leaching *(10 observations)*, and Indoor/Outdoor *(36 and 24 repsectively)*. In total, there were 74 observations. 
+
+Not all variables were necessary for every one of the trials since each trial had a unique purpose. Therefore, we built three separate data sets containing information necessary for each trial. 
+
+The Gavage trial data set consisted of the trial and tank, the dosage level administered, the mortality rate, and a variable keeping track of the deaths occurring over a time range of one hour to three days. The Leaching trial set also contained the trial, tank, dosage level administered, mortality rate, but instead of the deaths over time, it contained the concentration of treatment in the water from one hour to three days after the fish were treated. The Indoor/Outdoor trials did not contain the mortality and treatment water level over time, but contained everything else. 
+
+Although both of these data sets included information on mortality rates, the raw data came as a fraction of string type which needed to be cleaned before further use. The first number in the fraction represented the number of deaths in the tank and was extracted from each row and saved in a separate column. Furthermore, the denominator represented the total number of fish in the that tank and was also extracted. This was then stored in a separate column while the original mortality rate was then discarded.
+
+
+```{r Cleaning}
+survival_df <- survival_df %>%
+  mutate(
+    Died = as.numeric(str_extract(survival_df$TotalMort, pattern = '^[0-9]')),  # ^ means start of string
+    Total = as.numeric(str_extract(survival_df$TotalMort, pattern = '[0-9]{1,2}$')), # $ means end of string
+    Percent_Died = ifelse(Total == 0, 0, Died/Total)
+    
+  )
+
+'
+For Cleaning the Total Mortality variable:
+  1. Originally stored in Died/Total format
+  2. Grab the First Number using a regular expression
+  3. Force to Numeric
+  4. Assign to Died
+  
+  1. Originally stored in Died/Total format
+  2. Grab the Second Number(s) using a regular expression
+  3. Force to Numeric
+  4. Assign to Total
+'
+```
+
+```{r Dropping}
+# Get rid of unnecessary variables
+survival_df <- survival_df %>%
+  select(., -c(Mort1, Mort4, Mort8, Mort24, Mort48, Mort72, Conc1, Conc4, Conc8, Conc24, Conc48, Conc72, TotalMort))
+
+'
+Deleted unnecessary columns including mortality at times, concentration at times, and total mortality (we made our own mortality variable) 
+'
+
+```
+
+```{r ExtractingDose}
+'
+
+Next:
+  Questions:
+    1. Are these data sets related? Can we bind them together? (They have different amt of rows)*
+    2. Is survival a summary df?
+    3. During eda do we use surv? or morph?
+
+'
+
+survival_df <- survival_df %>%
+  mutate(Dose = 
+           case_when(str_extract(Dosage.Level, 
+                                 pattern = '[/]?[a-z]{2}$') == 'mg' ~  # leave mg
+                       as.numeric(str_extract(Dosage.Level, pattern = '[0-9]{1,2}')),
+                    str_extract(Dosage.Level, 
+                                 pattern = '[/]?[a-z]{1}$') == 'g' ~
+                      as.numeric(str_extract(Dosage.Level, pattern = '[0-9]+[.][0-9]+')) * 1000,  # convert g to mg
+                    str_extract(Dosage.Level, 
+                                 pattern = '[/][a-z]{1}$') == '/d' ~  # convert mg/.../d to mg
+                      as.numeric(str_extract(Dosage.Level, pattern = '[0-9]+')),
+                    TRUE ~ 0  # change control to zero
+  )
+)
+```
+
+# Data Exploration
+
+Again, it is vital to understand that the experimental unit of the Survival data set is an entire tank of fish while each observation in the Morphology data set is an individual fish. The Survival data set included information on 77 different Tank, Trial and Dosage level pairs while the Morphology data set contained 630 individual fish.
+
+As shown in Figure One, carp make up the majority of fish in the morphology data set. They account for 235 of the 630 fish present (37.3%). Bluegill and Yellowhead Perch are the next most prominent species, followed by Fathead Minnows.
+
+```{r Exploring2, include = T, fig.cap = "Figure 1: Fish Species by Trial for Morphology"}
+m1 <- morph_df %>%
+  mutate(Species = recode_factor(.x = .$Species, !!!new_labels)) %>%
+  group_by(Species, Trial) %>%
+  summarize(Counts = n(), Percent = Counts / nrow(morph_df)) %>%
+  ggplot(., aes(x = Species, y = Counts))+
+  geom_bar(aes(fill = Trial), stat = 'identity', position = 'dodge') +
+  # geom_text(aes(label = paste0(round(Percent,3)*100, '%', sep = '')), hjust =1 ) + 
+  coord_flip() +
+  scale_fill_brewer(palette = 'Accent')+
+  labs(y = 'Observed Count', x = '')
+
+m2 <- morph_df %>%
+  mutate(Species = recode_factor(.x = .$Species, !!!new_labels)) %>%
+  group_by(Species) %>%  # FIXME if we decide to include Trial just add it to the group_by call
+  summarize(Counts = n(), Percent = round(Counts / nrow(morph_df),3)) %>% 
+  ggtexttable(.,rows = NULL, theme = ttheme('mBlue'))  # TODO should this table contain trial information as well?? Simialr to the graph? (This is based off of bennie's general notes to the class)
+  
+plot_grid(m1, m2, nrow = 2)
+```
+
+Researchers were interested in understanding length and weight of the fish in order to analyze the relationship between size of the fish and mortality rate. In figure 2, it appears that the majority of the fish are smaller in size with some fish reaching to be much longer and heavier. It is evident that the longer and heavier fish consist of mostly Carp.
+
+```{r HeightvsWeight, include = T, fig.cap = "Figure 2: Fish Weight and Height by Species  in Morphometrics", out.width=4}
+h1 <- ggplot(morph_df, aes(Standard.length, Weight)) +
+  geom_bin2d(bins = 20, color ="white")+
+  scale_fill_gradient(low =  "#00AFBB", high = "#FC4E07") +
+  labs(fill = 'Number of Fish', x = 'Length (mm)', y = 'Weight (g)')
+
+h2 <- morph_df %>% 
+  mutate(Species = recode_factor(.x = .$Species, !!!new_labels)) %>% 
+  ggplot(., aes(Standard.length, Weight)) +
+  geom_point(aes(color = Species))+
+  geom_encircle( aes(fill = Species, color = Species), alpha = .2) + 
+  labs(x = 'Length (mm)', y = 'Weight (g)')
+
+
+plot_grid(h1, h2, nrow = 2)
+# get feedback on this Friday (2/20)
+```
+
+
+Figure 3 shows that both forms of Carp seem to be bigger than other species of interest in this study. Specifically, Common Carp are the biggest by a large margin in this study, followed by Other Carp which seem to be comparable to Bluegill in size. 
+
+
+```{r Table2, include = T, fig.cap = "Figure 3: Summary statistics of species in Morphometrics"}
+morph_df %>%
+  mutate(Species = recode_factor(.x = .$Species, !!!new_labels)) %>%
+  group_by(Species) %>%
+  summarize(`median length` = median(Standard.length), 
+            `median weight` = median(Weight),
+            `min weight` = min(Weight),
+            `max weight` = max(Weight),
+            `min length` = min(Standard.length),
+            `max length` = max(Standard.length))%>%
+  # dplyr::select(., -median_length) %>%
+  kable()
+```
+
+
+_Figure 3: Summary statistics of species in Morphometrics_
+
+Among the survival data set, Bluegill were the most prevalant species, followed by other Carp, Yellowhead Perch, and then Fathead Minnows in respective, decreasing order. Included in the data were a species labled as Adult and Juvenile Common Carp. 
+
+```{r Grouping, include = T, fig.cap = "Figure 4: Survival rates of species"}
+s1 <- survival_df %>%
+  mutate(Species = recode_factor(.x = .$Species, !!!new_labels)) %>%
+  group_by(Species, Trial) %>%
+  summarize(Counts = n(), Percent = Counts / nrow(survival_df)) %>%
+  ungroup() %>%
+  ggplot(., aes(x = Species, y = Counts))+
+  geom_bar(aes(fill = Trial), stat = 'identity', position = 'dodge') +
+  # geom_text(aes(label = paste0(round(Percent,3)*100, '%', sep = '')), hjust =1 ) +
+  coord_flip() +
+  scale_fill_brewer(palette = 'Accent') +  # can play with palette if need be
+  labs(y = 'Observed Count', x = '')
+
+s2 <- survival_df %>%
+  mutate(Species = recode_factor(.x = .$Species, !!!new_labels)) %>%
+  group_by(Species) %>%
+  summarize(Counts = n(), Percent = round(Counts / nrow(survival_df),3), total_fish = sum(Total)) %>% 
+  ggtexttable(.,rows = NULL, theme = ttheme('mBlue')) 
+  
+plot_grid(s1, s2, nrow = 2)
+
+# should make these bar graphs into dumbell plots but don't have time...
+```
+
+
+
+
+```{r}
+gavage_df <- survival_df %>% 
+  filter(Trial == "Gavage")
+
+leaching_df <- survival_df %>%
+  filter(Trial == "Leaching")
+
+indout_df <- survival_df %>%
+  filter(Trial == "Indoor" | Trial == "Outdoor")
+```
+
+
+
+# Statistical Methods
+
+All analysis was conducted using R Core Team (2019) (version 3.6.2). R: A language and environment for statistical computing. R Foundation for Statistical Computing, Vienna, Austria. URL
+https://www.R-project.org/.
+
+### Gavage Trials
+
+The Gavage trials consist of 2 observation of 3 different administered doses. This means that there were two tanks for the 26, 52, and 106 mg levels. It was determined to split the 3 doses (26, 52, and 106 mg) into low, medium, and high respectively. From there, a t-test was implemented, due to it's robustness and statistical power. 
+
+### Indoor/Outdoor Trials
+
+Since there were incomplete pairs of Trial Types, Species and Dosage Level some of these variables were manipulated for ease of analysis. Dosage was releveled and labeled as "Control" if the dosage was 0mg, and "Lethal" if dose administered was above 0mg. 
+
+Furthermore, Carp were the primary species of interest, as they are an invasive species that have detrimental effects on the native environment and in turn, native species. In order to reflect this, the species variable was manipulated into two factors: Carp and Native Species. 
+
+Moreover, the indoor and outdoor trials were analyzed seperately in order to control for some suspected environmental variation. 
+
+Chi square tests for Independence were conducted for both the indoor and outdoor trials in order to check for an association between the Mortality Rate against Species as described above. Fisher's Exact test was conducted to verify the results and assess the conditions of parametric counterpart. 
+
+It is important to note that the procedures described above ignore whether or not the experimental units were given a lethal dosage of treatment or were given the control. As a result, this procedure (Chi Square test for Independence, followed by Fisher's Exact Test) was repeated for the control group and fish who were given a lethal dosage (for both the indoor and outdoor trials).
+
+Furthermore, Chi Square Tests and Fisher's Exact Test was also conducted for the Native Species who recieved a lethal dose of the treatment. This was done to explore if there was a difference in the Mortality Rate between the indoor and outdoor trials, as the purpose of these trials were different.
+
+# Results
+
+### Gavage Trials
+ 
+The t test showed that there is no significant difference between 106 and 52 mg (p-value = 0.5). There does seem to be some kind of difference between 52 and 26 mg (p-value = 0.063). Therefore, it was determined that the lethal does was 52mg. However, the definition of lethal dose can be subjective.
+
+```{r IndoorOverall}
+# Test_1A
+
+in_df <- indout_df %>%  # save df for later
+  mutate(Carp = ifelse(str_detect(Species, pattern = 'CAP|CCP'), 'Carp', 'Native'),
+         dose = ifelse(Dose>0, 'Treatment', 'Control')) %>% 
+  filter(Trial == 'Indoor') %>% 
+  group_by(dose, Carp) %>% 
+  summarize(total = sum(Total), total_died = sum(Died), total_surv = total - total_died)
+
+indoor_omb <-  in_df %>% 
+  xtabs(cbind(total_died, total_surv) ~ Carp, .)
+
+chi1A <- chisq.test(indoor_omb)
+fish1A <- fisher.test(indoor_omb)
+
+
+  
+```
+
+```{r OutdoorOverall} 
+# Test_1B
+
+out_df <- indout_df %>%  # save df for later computation
+  mutate(Carp = ifelse(str_detect(Species, pattern = 'CAP|CCP'), 'Carp', 'Native'),
+         dose = ifelse(Dose>0, 'Treatment', 'Control')) %>% 
+  filter(Trial == 'Outdoor') %>% 
+  group_by(dose, Carp) %>% 
+  summarize(total = sum(Total), total_died = sum(Died), total_surv = total - total_died)
+
+outdoor_omb <- out_df %>% 
+  xtabs(cbind(total_died, total_surv) ~ Carp, .)
+
+chi1B <- chisq.test(outdoor_omb)
+fish1B <- fisher.test(outdoor_omb)
+```
+
+```{r IndoorByTreatment_Control}
+# Test2_A
+
+in_control <- in_df %>% 
+  filter(dose == 'Control') %>% 
+  xtabs(cbind(total_died, total_surv) ~ Carp, .)
+
+chi2A <- chisq.test(in_control)  # conditions not satisfied... use fishers
+fish2A <- fisher.test(in_control)
+
+```
+
+```{r IndoorByTreatment_Treatment}
+# Test_3A
+
+in_treatment <- in_df %>% 
+  filter(dose == 'Treatment') %>% 
+  xtabs(cbind(total_died, total_surv) ~ Carp, .)
+
+chi3A <- chisq.test(in_treatment) 
+fish3A <- fisher.test(in_treatment)
+```
+
+```{r OutdoorByTreatment_Control}
+# Test_2B
+
+out_control <- out_df %>% 
+  filter(dose == 'Control') %>% 
+  xtabs(cbind(total_died, total_surv) ~ Carp, .)
+
+chi2B <- chisq.test(out_control)  # conditions not satisfied... use fishers
+fish2B <- fisher.test(out_control)
+
+```
+
+
+```{r OutdoorByTreatment_Treatment}
+# Test_3B
+
+out_treatment <- out_df %>% 
+  filter(dose == 'Treatment') %>% 
+  xtabs(cbind(total_died, total_surv) ~ Carp, .)
+
+chi3B <- chisq.test(out_treatment) # conditions not satisfied use fishers..
+fish3B <-fisher.test(out_treatment)
+```
+
+
+
+```{r}
+# Test_4
+
+single_df <- indout_df %>%  # save df for later computation
+  mutate(Carp = ifelse(str_detect(Species, pattern = 'CAP|CCP'), 'Carp', 'Native'),
+         dose = ifelse(Dose>0, 'Treatment', 'Control'),
+         Trial = as.character(Trial)) %>% 
+  filter(dose == 'Treatment', Carp == 'Native') %>%
+  group_by(Trial) %>% 
+  summarize(total = sum(Total), total_died = sum(Died), total_surv = total - total_died) %>% 
+  xtabs(cbind(total_died, total_surv) ~ Trial, .)
+
+
+chi4 <- chisq.test(single_df)
+fish4 <- fisher.test(single_df)
+```
+
+### Indoor/Outdoor Trials
+
+When addressing the mortality of Carp, the indoor trials provided a higher rate of mortality than the outdoor trials. Furthermore, it appears that 20mg appears to be the optimal dosage. Due to limited trials and data, more exploration is needed to be conclusive.
+
+For the indoor trials, Fathead Minnows were severely effected by the dosage level, as about half of them were killed. This drastic effect may be due to the size of the minnows. As discovered earlier, these were the smallest of the species involved in the study. Although this species seems to be sensitive to the treatment at this level, this must be taken into account when determining how to target invasive carp. Yellowhead Perch appear to be affected by the treatment, while Bluegill appear to be unaffected.
+
+For the outdoor trials, the only fish species that shows signs of being affected are Bluegill. Fathead Minnow were not present in these studies, while Yellowhead Perch showed a mortality rate of 0%. It also appears that carp had a higher mortlity rate in the indoor trials when compared to the outdoor trials.
+
+
+```{r SurvivalSummary, include = T, fig.cap = 'Figure 5: Mortality by Species and Trial. (Note: Fathead Minnows were not present in outdoor trials.'}
+survival_df %>%
+  filter(Trial %in% c('Indoor', 'Outdoor')) %>% 
+  mutate(Species = recode_factor(.x = .$Species, !!!new_labels)) %>%
+  group_by(Trial, Species) %>%
+  summarize(., `Mortality Rate` = sum(Died)/sum(Total)) %>%
+  ggplot(., aes(x = Species))+
+  geom_bar(aes(y = `Mortality Rate`, fill = Species), stat = 'identity', position = 'dodge') +
+  facet_wrap(~Trial, strip.position = 'bottom') +
+  labs(x = '',  y = 'Mortality Rate')+
+  theme(axis.title.x=element_blank(),
+    axis.text.x=element_blank(),
+    axis.ticks.x=element_blank())+
+  scale_fill_colorblind()
+
+```
+
+One interesting observation is that at the control level (0 mg), fish mortality is still present. More specifically, Bluegill and Yellowhead Perch saw higher death rates than other fish. This should be investigated further, as it could provide an insight into fatality explained by confounding factors.
+
+```{r ResultsSummary, include = T}
+
+chis <- ls()[str_detect(ls(), pattern = 'chi[0-9]')]
+fishs <- ls()[str_detect(ls(), pattern = 'fish[0-9]')]
+# 2A, 2B and 3B the expected counts for the chisq tests were not met 
+pvals_chi <- vector(length = length(chis))
+pvals_fish <- vector(length = length(fishs))
+uppers <- vector(length = length(fishs))
+lowers <- vector(length = length (fishs))
+OR_est <- vector(length = length(fishs))
+
+i = 1
+for (obj in chis){
+  curr_obj <- get(obj)  # get the current object
+  pvals_chi[i] <- curr_obj$p.value
+  i = i+1
+}
+
+i = 1
+for (obj in fishs){
+  curr_obj <- get(obj)
+  pvals_fish[i] <- curr_obj$p.value
+  uppers[i] <- curr_obj$conf.int[2]
+  lowers[i] <- curr_obj$conf.int[1]
+  OR_est[i] <- curr_obj$estimate
+  i = i+1
+}
+
+summary_row_names <- c('Indoor (Carp vs Native)', 'Outdoor (Carp vs Native)', 
+                       'Indoor Control (Carp vs Native)', 
+                       'Indoor Treatment (Carp vs Native)',
+                       'Outdoor Control (Carp vs Native)', 'Outdoor Treatment (Carp vs Native)', 
+                       'Outdoor Native by Trial')
+summary_df <- data.frame(row.names = summary_row_names, `Chisq P values` = pvals_chi,
+                         `Fisher P values` = pvals_fish,
+                         `OR Estimate` = OR_est,
+                         `Lower Bound` = lowers,
+                         `Upper Bound` = uppers)
+
+
+round(summary_df,3)[,1:3] %>% 
+  kable()
+```
+
+_Figure 6: Summary of Statistical Results_
+
+When looking at simply Carp and Native Species there was a significant difference between the Mortality Rate of the two groups for the Outdoor Trials (P value = .003) while in the Indoor Trials there did not appear to be much evidence of a difference in the two groups (p value = .251). 
+
+Next after conducting seperate test for the control and treatment groups, neither the control group or the treatment group showed evidence for a difference in the Mortality Rate between Carp and Native Species (Control P value = 1, Treatment P value = .841). On the other hand there seemed to be a difference between the Mortality Rate of Outdoor fish in both the Control and the fish that recieved the Lethal Dosage (Control P value  = .134, Treatment P value < .001). 
+
+For the Outdoor Native Species there was an significant difference in the Mortality Rates between the Outdoor and Indoor Trials (P value < .001). 
+
+After investigating this further it was discovered that there were almost no deaths for Native Species in the Outdoor Trials where a lethal dose was applied. This is interesting since there were was approximately a 5% Mortality rate for Native Species in the Outdoor Trials when there was no treatment (control group). Investigating this further would be recommend to either clear up a discrepency or uncover a confounding factor between the Indoor and Outdoor Trials. 
+
+```{r include = T, fig.cap = 'Figure 7'}
+survival_df %>%
+  filter(Trial %in% c('Indoor', 'Outdoor')) %>%
+  mutate(Carp = ifelse(str_detect(Species, pattern = 'CAP|CCP'), 'Carp', 'Native'),
+         dose = ifelse(Dose>0, 'Treatment', 'Control')) %>% 
+  filter(Carp == 'Native') %>% 
+  group_by(Trial, dose) %>% 
+  summarize(., Mortality_Rate = sum(Died)/sum(Total), count = sum(Total)) %>% 
+  ggplot(.,aes(x = Trial))+
+  geom_point(aes(y = Mortality_Rate, color = Trial), size = 4) +
+  geom_segment(aes(x = Trial, xend = Trial, y = 0, yend = Mortality_Rate), color = 'black')+
+  facet_wrap(~dose) +
+  labs(y = 'Mortality Rate', x = '')
+
+
+```
+
+For future trials we would recommend conducting trials where current sample counts are low, as well as conducting trials in missing pairs of Trial, Species and Dose would allow for a more thorough analysis. Specifically into each of the Species within the Native Species. 
