@@ -6,7 +6,7 @@ This project involves analyzing a chemical treatment on invasive carp and looks 
 # Contents
 
 * Markdown
-* HTML Document
+* Written Report
 * Data Files
 
 # References

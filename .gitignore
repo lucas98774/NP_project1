@@ -1,4 +1,7 @@
-.Rproj.user
+*.docx
+!Final_Draft.docx
+
+.Rproj.useri
 .Rhistory
 .RData
 .Ruserdata
